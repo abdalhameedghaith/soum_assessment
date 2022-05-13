@@ -1,0 +1,126 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Resources:
+  WorkItemBucketBackupRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - "sts:AssumeRole"
+            Effect: Allow
+            Principal:
+              Service:
+                - s3.amazonaws.com
+  BucketBackupPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - "s3:GetReplicationConfiguration"
+              - "s3:ListBucket"
+            Effect: Allow
+            Resource:
+              - !Join
+                - ""
+                - - "arn:aws:s3:::"
+                  - !Ref MainS3Bucket
+          - Action:
+              - "s3:GetObjectVersion"
+              - "s3:GetObjectVersionAcl"
+            Effect: Allow
+            Resource:
+              - !Join
+                - ""
+                - - "arn:aws:s3:::"
+                  - !Ref MainS3Bucket
+                  - /*
+          - Action:
+              - "s3:ReplicateObject"
+              - "s3:ReplicateDelete"
+            Effect: Allow
+            Resource:
+              !Join [
+                "",
+                ["arn:aws:s3:::", !Ref "AWS::StackName", "-" , "soumreplia123", "/*"],
+                ]
+      PolicyName: BucketBackupPolicy
+      Roles:
+        - !Ref WorkItemBucketBackupRole
+
+  replicaS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Join ["-", [!Ref "AWS::StackName", "soumreplia123"]]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: TRUE
+        BlockPublicPolicy: TRUE
+        IgnorePublicAcls: TRUE
+        RestrictPublicBuckets: TRUE
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Status: Enabled
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: INTELLIGENT_TIERING
+
+
+  MainS3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Join ["-", [!Ref "AWS::StackName", "soummain123"]]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: TRUE
+        BlockPublicPolicy: TRUE
+        IgnorePublicAcls: TRUE
+        RestrictPublicBuckets: TRUE
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Status: Enabled
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: INTELLIGENT_TIERING
+      ReplicationConfiguration:
+        Role: !GetAtt
+          - WorkItemBucketBackupRole
+          - Arn
+        Rules:
+          - Destination:
+              Bucket:
+                !Join [
+                  "",
+                  ["arn:aws:s3:::", !Ref "AWS::StackName", "-" , "soumreplia123"],
+                ]
+              StorageClass: STANDARD
+            Id: Backup
+            Prefix: ""
+            Status: Enabled
+
+
+
+
+  CloudFront:
+    Type: "AWS::CloudFront::Distribution"
+    Properties:
+      DistributionConfig:
+        Comment: "How to serve content encrypted with SSE-KMS from S3 using CloudFront"
+        Origins:
+          - DomainName:
+              !Join [
+                ".",
+                [!Ref MainS3Bucket, "s3", !Ref "AWS::Region", "amazonaws.com"],
+              ]
+            Id: S3-regional-endpoint
+            S3OriginConfig:
+              OriginAccessIdentity: !Ref "AWS::NoValue"
+        DefaultCacheBehavior:
+          TargetOriginId: S3-regional-endpoint
+          ForwardedValues:
+            QueryString: "false"
+          ViewerProtocolPolicy: redirect-to-https
+        Enabled: "true"
